@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Student Record Management System</title>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  body {
+    background: #f4f6f9;
+    padding-bottom: 3rem;
+  }
+  .navbar-brand {
+    font-weight: 600;
+  }
+  #alertArea {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 1080;
+    min-width: 280px;
+  }
+  .card {
+    border: none;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  }
+  th {
+    white-space: nowrap;
+  }
+  #studentsTable tbody tr:hover {
+    background-color: #f0f7ff;
+  }
+  .gpa-badge {
+    font-weight: 600;
+  }
+  #formCard.editing {
+    border: 2px solid #0d6efd;
+  }
+</style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark bg-dark mb-4">
+  <div class="container">
+    <span class="navbar-brand mb-0 h1">🎓 Student Record Management System</span>
+  </div>
+</nav>
+
+<div id="alertArea"></div>
+
+<div class="container">
+
+  <!-- ==================== Add / Edit form ==================== -->
+  <div class="card mb-4" id="formCard">
+    <div class="card-body">
+      <h5 class="card-title mb-3" id="formTitle">Add New Student</h5>
+      <form id="studentForm" novalidate>
+        <input type="hidden" id="studentId" />
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-control" id="name" required maxlength="100" />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Roll Number</label>
+            <input type="text" class="form-control" id="rollNumber" required maxlength="30" />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Email</label>
+            <input type="email" class="form-control" id="email" required />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Department</label>
+            <input type="text" class="form-control" id="department" required maxlength="60" />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Year</label>
+            <input type="number" class="form-control" id="year" min="1" max="6" required />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">GPA (0–10)</label>
+            <input type="number" class="form-control" id="gpa" min="0" max="10" step="0.01" required />
+          </div>
+        </div>
+        <div class="mt-3">
+          <button type="submit" class="btn btn-primary" id="submitBtn">Add Student</button>
+          <button type="button" class="btn btn-outline-secondary" id="cancelEditBtn" style="display:none;">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== Search + table ==================== -->
+  <div class="card">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h5 class="card-title mb-0">Students</h5>
+        <div class="input-group" style="max-width: 320px;">
+          <input type="text" class="form-control" id="searchInput" placeholder="Search by name…" />
+          <button class="btn btn-outline-secondary" id="searchBtn" type="button">Search</button>
+          <button class="btn btn-outline-secondary" id="clearSearchBtn" type="button">Clear</button>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-hover align-middle" id="studentsTable">
+          <thead class="table-light">
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Roll No.</th>
+              <th>Email</th>
+              <th>Department</th>
+              <th>Year</th>
+              <th>GPA</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="studentsBody">
+            <!-- rows injected by JS -->
+          </tbody>
+        </table>
+      </div>
+      <div id="emptyState" class="text-center text-muted py-4" style="display:none;">
+        No students found.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===========================================================================
+// Configuration
+// ===========================================================================
+// Base URL of the Spring Boot backend. Change this if you run the backend
+// on a different host/port.
+const API_BASE = "http://localhost:8080/api/students";
+
+// ===========================================================================
+// Small helpers
+// ===========================================================================
+
+/** Show a dismissible Bootstrap alert (success or error) in the top-right corner. */
+function showAlert(message, type = "success") {
+  const alertArea = document.getElementById("alertArea");
+  const el = document.createElement("div");
+  el.className = `alert alert-${type} alert-dismissible fade show shadow-sm`;
+  el.role = "alert";
+  el.innerHTML = `
+    ${escapeHtml(message)}
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+  `;
+  alertArea.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/** Wrapper around fetch() that parses JSON and throws a readable error for non-2xx responses. */
+async function apiFetch(url, options = {}) {
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch (networkErr) {
+    // fetch() itself throws (rather than resolving with a bad status) when the
+    // request never reaches the server — e.g. backend not running, wrong port,
+    // or a CORS policy rejection. This is the "click Add and nothing happens"
+    // failure mode, so make it loud and specific instead of swallowing it.
+    console.error("Network/CORS error calling", url, networkErr);
+    throw new Error(
+      `Could not reach the backend at ${API_BASE}. Is it running (mvn spring-boot:run)? ` +
+      `Open the browser DevTools Console/Network tab for the exact CORS or connection error.`
+    );
+  }
+
+  // 204 No Content (DELETE) has no body to parse
+  if (res.status === 204) return null;
+
+  let body = null;
+  try {
+    body = await res.json();
+  } catch (_) {
+    // no JSON body
+  }
+
+  if (!res.ok) {
+    let message = (body && body.message) || `Request failed with status ${res.status}`;
+    if (body && body.fieldErrors) {
+      const details = Object.entries(body.fieldErrors).map(([f, m]) => `${f}: ${m}`).join(", ");
+      message += ` (${details})`;
+    }
+    console.error("API error:", res.status, body);
+    throw new Error(message);
+  }
+
+  return body;
+}
+
+// ===========================================================================
+// Rendering
+// ===========================================================================
+
+function renderStudents(students) {
+  const tbody = document.getElementById("studentsBody");
+  const emptyState = document.getElementById("emptyState");
+  tbody.innerHTML = "";
+
+  if (!students || students.length === 0) {
+    emptyState.style.display = "block";
+    return;
+  }
+  emptyState.style.display = "none";
+
+  for (const s of students) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${s.id}</td>
+      <td>${escapeHtml(s.name)}</td>
+      <td>${escapeHtml(s.rollNumber)}</td>
+      <td>${escapeHtml(s.email)}</td>
+      <td>${escapeHtml(s.department)}</td>
+      <td>${s.year}</td>
+      <td><span class="badge bg-info text-dark gpa-badge">${Number(s.gpa).toFixed(2)}</span></td>
+      <td>
+        <button class="btn btn-sm btn-outline-primary me-1 edit-btn" data-id="${s.id}">Edit</button>
+        <button class="btn btn-sm btn-outline-danger delete-btn" data-id="${s.id}">Delete</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  // Wire up per-row buttons
+  tbody.querySelectorAll(".edit-btn").forEach(btn =>
+    btn.addEventListener("click", () => startEdit(btn.dataset.id, students))
+  );
+  tbody.querySelectorAll(".delete-btn").forEach(btn =>
+    btn.addEventListener("click", () => deleteStudent(btn.dataset.id))
+  );
+}
+
+// ===========================================================================
+// Data loading
+// ===========================================================================
+
+let currentStudents = [];
+
+async function loadStudents() {
+  try {
+    currentStudents = await apiFetch(API_BASE);
+    renderStudents(currentStudents);
+  } catch (err) {
+    showAlert(`Failed to load students: ${err.message}`, "danger");
+  }
+}
+
+async function searchStudents(name) {
+  try {
+    const results = await apiFetch(`${API_BASE}/search?name=${encodeURIComponent(name)}`);
+    renderStudents(results);
+  } catch (err) {
+    showAlert(`Search failed: ${err.message}`, "danger");
+  }
+}
+
+// ===========================================================================
+// Form handling (Add / Edit)
+// ===========================================================================
+
+const form = document.getElementById("studentForm");
+const formTitle = document.getElementById("formTitle");
+const formCard = document.getElementById("formCard");
+const submitBtn = document.getElementById("submitBtn");
+const cancelEditBtn = document.getElementById("cancelEditBtn");
+
+function resetForm() {
+  form.reset();
+  document.getElementById("studentId").value = "";
+  formTitle.textContent = "Add New Student";
+  submitBtn.textContent = "Add Student";
+  cancelEditBtn.style.display = "none";
+  formCard.classList.remove("editing");
+}
+
+function startEdit(id, students) {
+  const student = students.find(s => String(s.id) === String(id));
+  if (!student) return;
+
+  document.getElementById("studentId").value = student.id;
+  document.getElementById("name").value = student.name;
+  document.getElementById("rollNumber").value = student.rollNumber;
+  document.getElementById("email").value = student.email;
+  document.getElementById("department").value = student.department;
+  document.getElementById("year").value = student.year;
+  document.getElementById("gpa").value = student.gpa;
+
+  formTitle.textContent = `Editing: ${student.name}`;
+  submitBtn.textContent = "Save Changes";
+  cancelEditBtn.style.display = "inline-block";
+  formCard.classList.add("editing");
+  formCard.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+cancelEditBtn.addEventListener("click", resetForm);
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const id = document.getElementById("studentId").value;
+  const payload = {
+    name: document.getElementById("name").value.trim(),
+    rollNumber: document.getElementById("rollNumber").value.trim(),
+    email: document.getElementById("email").value.trim(),
+    department: document.getElementById("department").value.trim(),
+    year: Number(document.getElementById("year").value),
+    gpa: Number(document.getElementById("gpa").value),
+  };
+
+  try {
+    if (id) {
+      await apiFetch(`${API_BASE}/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      showAlert("Student updated successfully.");
+    } else {
+      await apiFetch(API_BASE, { method: "POST", body: JSON.stringify(payload) });
+      showAlert("Student added successfully.");
+    }
+    resetForm();
+    await loadStudents();
+  } catch (err) {
+    showAlert(err.message, "danger");
+  }
+});
+
+// ===========================================================================
+// Delete
+// ===========================================================================
+
+async function deleteStudent(id) {
+  if (!confirm("Delete this student? This cannot be undone.")) return;
+  try {
+    await apiFetch(`${API_BASE}/${id}`, { method: "DELETE" });
+    showAlert("Student deleted successfully.");
+    await loadStudents();
+  } catch (err) {
+    showAlert(`Delete failed: ${err.message}`, "danger");
+  }
+}
+
+// ===========================================================================
+// Search bar wiring
+// ===========================================================================
+
+document.getElementById("searchBtn").addEventListener("click", () => {
+  const term = document.getElementById("searchInput").value.trim();
+  if (term) searchStudents(term);
+  else loadStudents();
+});
+
+document.getElementById("searchInput").addEventListener("keyup", (e) => {
+  if (e.key === "Enter") document.getElementById("searchBtn").click();
+});
+
+document.getElementById("clearSearchBtn").addEventListener("click", () => {
+  document.getElementById("searchInput").value = "";
+  loadStudents();
+});
+
+// ===========================================================================
+// Init
+// ===========================================================================
+loadStudents();
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
