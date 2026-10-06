@@ -40,8 +40,8 @@ public class Student {
     @NotNull(message = "Year is required")
     @Min(value = 1, message = "Year must be between 1 and 6")
     @Max(value = 6, message = "Year must be between 1 and 6")
-    @Column(nullable = false)
-    private Integer year;
+    @Column(name = "student_year", nullable = false)
+   private Integer year;
 
     @NotNull(message = "GPA is required")
     @DecimalMin(value = "0.0", message = "GPA must be between 0 and 10")
